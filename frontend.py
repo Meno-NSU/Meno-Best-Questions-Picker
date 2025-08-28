@@ -389,8 +389,8 @@ INDEX_HTML = """<!doctype html>
         pre.style.whiteSpace = 'pre-wrap';
         pre.style.wordBreak = 'break-word';
       } else {
-        pre.style.whiteSpace = 'pre';
-        pre.style.wordBreak = 'normal';
+        pre.style.whiteSpace = 'pre-wrap';
+        pre.style.wordBreak = 'break-word';
       }
     });
 
