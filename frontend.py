@@ -13,7 +13,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("frontend")
 
-BACKEND_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:8000")
+BACKEND_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:8888")
 app = FastAPI(title="Best Question Picker — Front")
 
 logger.info(f"Frontend app started. BACKEND_URL={BACKEND_URL}")
