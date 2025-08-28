@@ -116,7 +116,7 @@ INDEX_HTML = """<!doctype html>
       <div class="row">
         <div class="field">
           <label>Часовой пояс (IANA)</label>
-          <input id="tz" type="text" value="Europe/Amsterdam" />
+          <input id="tz" type="text" value="Asia/Novosibirsk" />
         </div>
         <div class="field">
           <label>Начало периода</label>
@@ -271,6 +271,15 @@ INDEX_HTML = """<!doctype html>
       </div>
     `;
   }
+  function formatToTz(isoString, tz="Asia/Novosibirsk") {
+      if (!isoString) return '';
+      const dt = new Date(isoString);
+      return dt.toLocaleString("ru-RU", {
+        timeZone: tz,
+        year: "numeric", month: "2-digit", day: "2-digit",
+        hour: "2-digit", minute: "2-digit", second: "2-digit"
+      });
+    }
 
   let lastResponse = null;
 
@@ -296,7 +305,7 @@ INDEX_HTML = """<!doctype html>
         <td style="min-width:110px">${renderScoreCell(c.model_score)}</td>
         <td class="mono">${escapeHtml(c.msg_id)}</td>
         <td class="mono">${escapeHtml(c.chat_id)}</td>
-        <td class="mono nowrap">${escapeHtml(c.created_at_iso)}</td>
+        <td class="mono nowrap">${escapeHtml(formatToTz(c.created_at_iso, $('#tz').value || 'Asia/Novosibirsk'))}</td>
         <td>${escapeHtml(c.content||'')}</td>
         <td>${renderCollapsibleCell(c.answer, "ответ — показать/скрыть")}</td>
         <td>${renderCollapsibleCell(c.model_reason, "обоснование — показать/скрыть")}</td>
