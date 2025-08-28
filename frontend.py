@@ -132,7 +132,7 @@ INDEX_HTML = """<!doctype html>
         </div>
         <div class="field" style="min-width:320px; flex:1">
           <label>Критерии оценивания (передаются в LLM)</label>
-          <textarea id="criteria">- Насколько интересен и полезен вопрос для широкой аудитории;
+          <textarea id="criteria">- Насколько интересен и полезен вопрос для студентов и абитуриентов Новосибирского Государственного Университета;
 - Сколько актуальных тем он затрагивает и насколько глубоко;
 - Ясность формулировки и конкретика;
 - Новизна по сравнению с типичными вопросами.</textarea>
@@ -175,7 +175,7 @@ INDEX_HTML = """<!doctype html>
       <h3 style="margin-top:0">Сырой ответ LLM</h3>
       <div class="raw-actions">
         <button id="rawCopy" class="ghost">Копировать</button>
-        <label class="mono"><input id="rawWrap" type="checkbox" /> переносить длинные строки</label>
+        <label class="mono"><input id="rawWrap" type="checkbox" checked /> переносить длинные строки</label>
       </div>
       <pre id="raw"></pre>
     </div>
