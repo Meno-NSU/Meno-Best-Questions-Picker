@@ -49,6 +49,7 @@ INDEX_HTML = """<!doctype html>
     .grid { display:grid; grid-template-columns: 1fr; gap:16px; }
     @media (min-width: 1024px) { .grid { grid-template-columns: 1fr 1fr; } }
     pre { white-space: pre-wrap; word-break: break-word; background:#0b1220; color:#e2e8f0; padding:12px; border-radius: 12px; }
+    .rawbox { white-space: pre; word-break: normal; overflow: auto; max-height: 70vh; }
     .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
     .muted { color: var(--muted); }
     .winner { border-left: 4px solid var(--ok); padding-left: 12px; }
@@ -59,6 +60,18 @@ INDEX_HTML = """<!doctype html>
     .badge { display:inline-block; padding:2px 8px; border-radius: 10px; border:1px solid var(--line); font-size:12px; }
     .flexcol { display:flex; flex-direction: column; gap:6px; }
     .nowrap { white-space:nowrap; }
+
+    /* Compact table */
+    .expander { cursor: pointer; user-select: none; }
+    .caret { display:inline-block; transition: transform .15s ease; }
+    .row-open .caret { transform: rotate(90deg); }
+    .q-ellipsis { max-width: 480px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .details-row { display: none; background: #f8fafc; }
+    .details-row.open { display: table-row; }
+    .details-box { padding: 8px 4px; }
+    .kv { margin: 4px 0; }
+    .kv .k { color: var(--muted); width: 80px; display:inline-block; }
+    .code { background:#0b1220; color:#e2e8f0; padding:10px; border-radius: 10px; overflow:auto; }
   </style>
 </head>
 <body>
@@ -105,6 +118,8 @@ INDEX_HTML = """<!doctype html>
         <button id="btnPickBest">Оценить + выбрать победителя</button>
         <span id="status" class="status"></span>
         <div class="search">
+          <button id="btnExpandAll" class="ghost">Expand all</button>
+          <button id="btnCollapseAll" class="ghost">Collapse all</button>
           <select id="sort">
             <option value="as_is">Порядок из бэка</option>
             <option value="score_desc">Score ↓</option>
@@ -125,8 +140,11 @@ INDEX_HTML = """<!doctype html>
       </div>
 
       <div class="card">
-        <h3 style="margin-top:0">Сырой ответ LLM</h3>
-        <pre id="raw"></pre>
+        <div style="display:flex; align-items:center; gap:8px">
+          <h3 style="margin:0">Сырой ответ LLM</h3>
+          <button id="btnCopyRaw" class="ghost" style="margin-left:auto">Copy</button>
+        </div>
+        <pre id="raw" class="rawbox"></pre>
       </div>
     </div>
 
@@ -139,14 +157,13 @@ INDEX_HTML = """<!doctype html>
         <table id="table">
           <thead>
             <tr>
+              <th class="nowrap"></th>
               <th class="nowrap">#</th>
               <th class="nowrap">Score</th>
               <th>msg_id</th>
               <th>chat_id</th>
               <th class="nowrap">time (UTC)</th>
               <th>question</th>
-              <th>answer</th>
-              <th>reason</th>
             </tr>
           </thead>
           <tbody></tbody>
@@ -202,6 +219,22 @@ INDEX_HTML = """<!doctype html>
 
   let lastResponse = null;
 
+  function makeDetailsRow(c){
+    const tr = document.createElement('tr');
+    tr.className = 'details-row';
+    tr.dataset.msgId = c.msg_id;
+    const td = document.createElement('td');
+    td.colSpan = 7; // все колонки
+    td.innerHTML = `
+      <div class="details-box">
+        <div class="kv"><span class="k">Answer</span> <span>${escapeHtml(c.answer||'')}</span></div>
+        <div class="kv"><span class="k">Reason</span> <span>${escapeHtml(c.model_reason||'')}</span></div>
+      </div>
+    `;
+    tr.appendChild(td);
+    return tr;
+  }
+
   function renderTable(res){
     const tbody = $('#table tbody');
     tbody.innerHTML = '';
@@ -218,19 +251,39 @@ INDEX_HTML = """<!doctype html>
     rows.forEach(c => {
       const hay = `${c.msg_id} ${c.chat_id} ${c.content||''} ${c.answer||''} ${c.model_reason||''}`.toLowerCase();
       if (q && !hay.includes(q)) return;
+
       const tr = document.createElement('tr');
-      tr.innerHTML = `
+      tr.dataset.msgId = c.msg_id;
+
+      // expander cell
+      const tdExp = document.createElement('td');
+      tdExp.className = 'expander';
+      tdExp.innerHTML = `<span class="caret">▸</span>`;
+      tdExp.addEventListener('click', () => toggleRow(c.msg_id));
+      tr.appendChild(tdExp);
+
+      tr.innerHTML += `
         <td class="mono nowrap">${c.rank}</td>
         <td style="min-width:110px">${renderScoreCell(c.model_score)}</td>
         <td class="mono">${escapeHtml(c.msg_id)}</td>
         <td class="mono">${escapeHtml(c.chat_id)}</td>
         <td class="mono nowrap">${escapeHtml(c.created_at_iso)}</td>
-        <td>${escapeHtml(c.content||'')}</td>
-        <td>${escapeHtml(c.answer||'')}</td>
-        <td>${escapeHtml(c.model_reason||'')}</td>
+        <td><span class="q-ellipsis" title="${escapeHtml(c.content||'')}">${escapeHtml(c.content||'')}</span></td>
       `;
       tbody.appendChild(tr);
+
+      const details = makeDetailsRow(c);
+      tbody.appendChild(details);
     });
+  }
+
+  function toggleRow(msgId, open=null){
+    const main = document.querySelector(\`tr[data-msg-id="\${msgId}"]\`);
+    const details = document.querySelector(\`tr.details-row[data-msg-id="\${msgId}"]\`);
+    if (!main || !details) return;
+    const willOpen = (open===null) ? !details.classList.contains('open') : open;
+    details.classList.toggle('open', willOpen);
+    main.classList.toggle('row-open', willOpen);
   }
 
   function render(res){
@@ -256,7 +309,9 @@ INDEX_HTML = """<!doctype html>
                                  <div class="muted">Причина: ${escapeHtml(res.model_reason||'—')}</div>`;
     } else { $('#winner').style.display='none'; $('#winner').innerHTML=''; }
 
-    $('#raw').textContent = res?.raw_model_output || '';
+    // show raw fully, no formatting (pre preserves \n; no wrapping; scroll)
+    $('#raw').textContent = (res && typeof res.raw_model_output === 'string') ? res.raw_model_output : '';
+
     renderTable(res);
   }
 
@@ -286,11 +341,34 @@ INDEX_HTML = """<!doctype html>
     } finally { uiBusy(false); }
   }
 
+  // buttons
   $('#btnOnlyList').addEventListener('click', ()=> call('onlyList'));
   $('#btnScoreOnly').addEventListener('click', ()=> call('scoreOnly'));
   $('#btnPickBest').addEventListener('click', ()=> call('scoreAndPick'));
   $('#search').addEventListener('input', ()=>{ if (lastResponse) renderTable(lastResponse); });
   $('#sort').addEventListener('change', ()=>{ if (lastResponse) renderTable(lastResponse); });
+
+  // expand/collapse all
+  $('#btnExpandAll').addEventListener('click', ()=>{
+    if (!lastResponse) return;
+    (lastResponse.candidates||[]).forEach(c=> toggleRow(c.msg_id, true));
+  });
+  $('#btnCollapseAll').addEventListener('click', ()=>{
+    if (!lastResponse) return;
+    (lastResponse.candidates||[]).forEach(c=> toggleRow(c.msg_id, false));
+  });
+
+  // copy raw
+  $('#btnCopyRaw').addEventListener('click', async ()=>{
+    try {
+      await navigator.clipboard.writeText($('#raw').textContent || '');
+      $('#btnCopyRaw').textContent = 'Copied';
+      setTimeout(()=> $('#btnCopyRaw').textContent = 'Copy', 1200);
+    } catch (e) {
+      $('#btnCopyRaw').textContent = 'Copy failed';
+      setTimeout(()=> $('#btnCopyRaw').textContent = 'Copy', 1200);
+    }
+  });
 </script>
 </body>
 </html>
@@ -327,6 +405,7 @@ async def proxy_pick_best(request: Request):
             resp = await client.post(url, json=payload)
             logger.info(f"Backend status: {resp.status_code} [{mode}]")
             logger.debug(f"Backend headers: {resp.headers}")
+            # Не влияет на UI, но оставим усечённое логирование чтобы не забивать логи
             logger.debug(f"Backend body (truncated): {resp.text[:500]}")
             return Response(
                 content=resp.content,
