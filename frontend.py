@@ -48,7 +48,7 @@ INDEX_HTML = """<!doctype html>
     .pill { display:inline-block; padding:2px 8px; border-radius:999px; font-size:12px; border:1px solid #e2e8f0; background:#f8fafc; }
     .grid { display:grid; grid-template-columns: 1fr; gap:16px; }
     @media (min-width: 1024px) { .grid { grid-template-columns: 1fr 1fr; } }
-    pre { white-space: pre-wrap; word-break: break-word; background:#0b1220; color:#e2e8f0; padding:12px; border-radius: 12px; }
+    pre { background:#0b1220; color:#e2e8f0; padding:12px; border-radius: 12px; }
     .rawbox { white-space: pre; word-break: normal; overflow: auto; max-height: 70vh; }
     .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
     .muted { color: var(--muted); }
@@ -71,7 +71,6 @@ INDEX_HTML = """<!doctype html>
     .details-box { padding: 8px 4px; }
     .kv { margin: 4px 0; }
     .kv .k { color: var(--muted); width: 80px; display:inline-block; }
-    .code { background:#0b1220; color:#e2e8f0; padding:10px; border-radius: 10px; overflow:auto; }
   </style>
 </head>
 <body>
@@ -219,12 +218,12 @@ INDEX_HTML = """<!doctype html>
 
   let lastResponse = null;
 
-  function makeDetailsRow(c){
+  function makeDetailsRow(c, colCount){
     const tr = document.createElement('tr');
     tr.className = 'details-row';
     tr.dataset.msgId = c.msg_id;
     const td = document.createElement('td');
-    td.colSpan = 7; // все колонки
+    td.colSpan = colCount;
     td.innerHTML = `
       <div class="details-box">
         <div class="kv"><span class="k">Answer</span> <span>${escapeHtml(c.answer||'')}</span></div>
@@ -248,21 +247,16 @@ INDEX_HTML = """<!doctype html>
     if (sort === 'time_asc')   rows.sort((a,b)=> (a.created_at_iso||'').localeCompare(b.created_at_iso||''));
     if (sort === 'time_desc')  rows.sort((a,b)=> (b.created_at_iso||'').localeCompare(a.created_at_iso||''));
 
+    const colCount = document.querySelectorAll('#table thead th').length;
+
     rows.forEach(c => {
       const hay = `${c.msg_id} ${c.chat_id} ${c.content||''} ${c.answer||''} ${c.model_reason||''}`.toLowerCase();
       if (q && !hay.includes(q)) return;
 
       const tr = document.createElement('tr');
       tr.dataset.msgId = c.msg_id;
-
-      // expander cell
-      const tdExp = document.createElement('td');
-      tdExp.className = 'expander';
-      tdExp.innerHTML = `<span class="caret">▸</span>`;
-      tdExp.addEventListener('click', () => toggleRow(c.msg_id));
-      tr.appendChild(tdExp);
-
-      tr.innerHTML += `
+      tr.innerHTML = `
+        <td class="expander"><span class="caret">▸</span></td>
         <td class="mono nowrap">${c.rank}</td>
         <td style="min-width:110px">${renderScoreCell(c.model_score)}</td>
         <td class="mono">${escapeHtml(c.msg_id)}</td>
@@ -272,7 +266,11 @@ INDEX_HTML = """<!doctype html>
       `;
       tbody.appendChild(tr);
 
-      const details = makeDetailsRow(c);
+      // навешиваем обработчик на expander
+      const exp = tr.querySelector('.expander');
+      exp.addEventListener('click', () => toggleRow(c.msg_id));
+
+      const details = makeDetailsRow(c, colCount);
       tbody.appendChild(details);
     });
   }
@@ -290,26 +288,25 @@ INDEX_HTML = """<!doctype html>
     lastResponse = res;
 
     const total = (res?.candidates_count ?? 0);
-    const scored = (res?.candidates||[]).filter(x => typeof x.model_score === 'number').length;
-    const avg = (scored>0)
-      ? Math.round(10 * (res.candidates.filter(x => typeof x.model_score==='number').reduce((s,x)=>s+x.model_score,0)/scored)) / 10
-      : null;
+    const scoredList = (res?.candidates||[]).filter(x => typeof x.model_score === 'number');
+    const scored = scoredList.length;
+    const avg = (scored>0) ? Math.round(10 * (scoredList.reduce((s,x)=>s+x.model_score,0)/scored)) / 10 : null;
 
     $('#cnt').textContent = total;
-    const s = [];
-    s.push(`Кандидатов: ${total}`);
-    s.push(`Оценено: ${scored}${avg!=null?` (avg: ${avg})`:''}`);
-    if (res?.winner_msg_id) s.push(`Победитель: ${res.winner_msg_id}`);
-    $('#summary').textContent = s.join(' · ');
+    const parts = [];
+    parts.push(`Кандидатов: ${total}`);
+    parts.push(`Оценено: ${scored}` + (avg!=null ? (' (avg: ' + avg + ')') : ''));
+    if (res?.winner_msg_id) parts.push(`Победитель: ${res.winner_msg_id}`);
+    $('#summary').textContent = parts.join(' · ');
 
     if (res?.winner_msg_id) {
       $('#winner').style.display = '';
-      $('#winner').innerHTML = `<div class="mono">msg_id: <b>${escapeHtml(res.winner_msg_id)}</b></div>
-                                 <div style="margin:6px 0 8px 0"><b>${escapeHtml(res.winner_content||'')}</b></div>
-                                 <div class="muted">Причина: ${escapeHtml(res.model_reason||'—')}</div>`;
+      $('#winner').innerHTML = '<div class="mono">msg_id: <b>' + escapeHtml(res.winner_msg_id) + '</b></div>'
+                             + '<div style="margin:6px 0 8px 0"><b>' + escapeHtml(res.winner_content||'') + '</b></div>'
+                             + '<div class="muted">Причина: ' + escapeHtml(res.model_reason||'—') + '</div>';
     } else { $('#winner').style.display='none'; $('#winner').innerHTML=''; }
 
-    // show raw fully, no formatting (pre preserves \n; no wrapping; scroll)
+    // raw: полный, без форматирования
     $('#raw').textContent = (res && typeof res.raw_model_output === 'string') ? res.raw_model_output : '';
 
     renderTable(res);
@@ -333,10 +330,10 @@ INDEX_HTML = """<!doctype html>
       const r = await fetch('/api/pick_best_question', {
         method: 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)
       });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      if (!r.ok) throw new Error('HTTP ' + r.status);
       render(await r.json());
     } catch (e) {
-      $('#summary').innerHTML = `<span class="error">Ошибка: ${escapeHtml(e.message||String(e))}</span>`;
+      $('#summary').innerHTML = '<span class="error">Ошибка: ' + escapeHtml(e.message||String(e)) + '</span>';
       $('#raw').textContent = '';
     } finally { uiBusy(false); }
   }
@@ -405,7 +402,6 @@ async def proxy_pick_best(request: Request):
             resp = await client.post(url, json=payload)
             logger.info(f"Backend status: {resp.status_code} [{mode}]")
             logger.debug(f"Backend headers: {resp.headers}")
-            # Не влияет на UI, но оставим усечённое логирование чтобы не забивать логи
             logger.debug(f"Backend body (truncated): {resp.text[:500]}")
             return Response(
                 content=resp.content,
