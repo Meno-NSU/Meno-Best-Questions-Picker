@@ -1,10 +1,8 @@
 import os
-
 import httpx
 import logging
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
 
 # --- logging setup ---
 logging.basicConfig(
@@ -26,16 +24,17 @@ INDEX_HTML = """<!doctype html>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Выбор лучшего вопроса — UI</title>
   <style>
-    :root { --fg:#0f172a; --muted:#475569; --bg:#f8fafc; --prim:#2563eb; --ok:#16a34a; --warn:#b45309; --err:#dc2626; }
+    :root { --fg:#0f172a; --muted:#475569; --bg:#f8fafc; --prim:#2563eb; --ok:#16a34a; --warn:#b45309; --err:#dc2626; --line:#e5e7eb; }
     * { box-sizing: border-box; }
     body { margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial, "Noto Sans"; background: var(--bg); color: var(--fg); }
-    .wrap { max-width: 1100px; margin: 24px auto; padding: 0 16px; }
+    .wrap { max-width: 1200px; margin: 24px auto; padding: 0 16px; }
     h1 { font-size: 22px; margin: 0 0 16px; }
-    .card { background:#fff; border:1px solid #e5e7eb; border-radius: 14px; box-shadow: 0 2px 10px rgba(2,8,23,.04); padding:16px; }
+    .card { background:#fff; border:1px solid var(--line); border-radius: 14px; box-shadow: 0 2px 10px rgba(2,8,23,.04); padding:16px; }
     .row { display:flex; gap:12px; flex-wrap: wrap; }
     .field { display:flex; flex-direction: column; gap:6px; min-width: 240px; }
     label { font-size: 12px; color: var(--muted); }
-    input, select, textarea { border:1px solid #e5e7eb; border-radius: 10px; padding:10px 12px; font-size:14px; background:#fff; }
+    input, select, textarea { border:1px solid var(--line); border-radius: 10px; padding:10px 12px; font-size:14px; background:#fff; }
+    textarea { min-height: 92px; width: 100%; }
     input[type="checkbox"] { width:auto; scale:1.1; }
     button { border:1px solid var(--prim); background: var(--prim); color:#fff; padding:10px 14px; border-radius: 12px; font-weight:600; cursor:pointer; }
     button.secondary { background:#fff; color: var(--prim); }
@@ -44,16 +43,21 @@ INDEX_HTML = """<!doctype html>
     .status { font-size:12px; color: var(--muted); }
     table { width:100%; border-collapse: collapse; }
     thead th { position: sticky; top:0; background:#f1f5f9; z-index:1; }
-    th, td { text-align:left; padding:8px 10px; border-bottom:1px solid #e5e7eb; vertical-align: top; }
+    th, td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--line); vertical-align: top; }
     .pill { display:inline-block; padding:2px 8px; border-radius:999px; font-size:12px; border:1px solid #e2e8f0; background:#f8fafc; }
     .grid { display:grid; grid-template-columns: 1fr; gap:16px; }
-    @media (min-width: 900px) { .grid { grid-template-columns: 1fr 1fr; } }
+    @media (min-width: 1024px) { .grid { grid-template-columns: 1fr 1fr; } }
     pre { white-space: pre-wrap; word-break: break-word; background:#0b1220; color:#e2e8f0; padding:12px; border-radius: 12px; }
     .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
     .muted { color: var(--muted); }
     .winner { border-left: 4px solid var(--ok); padding-left: 12px; }
     .error { color: var(--err); }
-    .search { margin-left:auto; }
+    .search { margin-left:auto; display:flex; gap:8px; align-items:center; }
+    .scorebar { height: 6px; border-radius: 999px; background: #e2e8f0; position:relative; }
+    .scorebar > span { position:absolute; top:0; left:0; height:100%; border-radius:999px; }
+    .badge { display:inline-block; padding:2px 8px; border-radius: 10px; border:1px solid var(--line); font-size:12px; }
+    .flexcol { display:flex; flex-direction: column; gap:6px; }
+    .nowrap { white-space:nowrap; }
   </style>
 </head>
 <body>
@@ -76,22 +80,37 @@ INDEX_HTML = """<!doctype html>
         </div>
         <div class="field">
           <label>Лимит кандидатов</label>
-          <input id="limit" type="number" min="1" step="1" value="1000" />
+          <input id="limit" type="number" min="1" step="1" value="200" />
         </div>
-        <div class="field">
-          <label>Фильтр</label>
+        <div class="field" style="min-width:320px; flex:1">
+          <label>Критерии оценивания (передаются в LLM)</label>
+          <textarea id="criteria">- Насколько интересен и полезен вопрос для широкой аудитории;
+- Сколько актуальных тем он затрагивает и насколько глубоко;
+- Ясность формулировки и конкретика;
+- Новизна по сравнению с типичными вопросами.</textarea>
+        </div>
+        <div class="field" style="min-width:220px">
+          <label>Опции</label>
           <div style="display:flex; gap:16px; align-items:center; padding-top:8px">
+            <label class="mono"><input id="final_select" type="checkbox" checked /> do_final_llm_selection</label>
             <label class="mono"><input id="use_prescoring" type="checkbox" /> use_prescoring</label>
-            <label class="mono"><input id="dedupe" type="checkbox" checked /> dedupe</label>
+            <label class="mono"><input id="dedupe" type="checkbox" /> dedupe</label>
           </div>
         </div>
       </div>
       <div class="actions" style="margin-top:12px">
-        <button id="btnCandidatesOnly" class="secondary">Только кандидаты</button>
-        <button id="btnPickBest">Выбрать лучший (через LLM)</button>
+        <button id="btnCandidatesOnly" class="secondary">Оценить (LLM), без финального выбора</button>
+        <button id="btnPickBest">Оценить + выбрать победителя</button>
         <span id="status" class="status"></span>
         <div class="search">
-          <input id="search" type="text" placeholder="поиск по тексту…" />
+          <select id="sort">
+            <option value="as_is">Порядок из бэка</option>
+            <option value="score_desc">Score ↓</option>
+            <option value="score_asc">Score ↑</option>
+            <option value="time_asc">Время ↑</option>
+            <option value="time_desc">Время ↓</option>
+          </select>
+          <input id="search" type="text" placeholder="поиск по вопрос/ответ/обоснование…" />
         </div>
       </div>
     </div>
@@ -118,13 +137,14 @@ INDEX_HTML = """<!doctype html>
         <table id="table">
           <thead>
             <tr>
-              <th>#</th>
+              <th class="nowrap">#</th>
+              <th class="nowrap">Score</th>
               <th>msg_id</th>
               <th>chat_id</th>
-              <th>time (UTC)</th>
-              <th>is_question</th>
-              <th>prescore</th>
-              <th>content</th>
+              <th class="nowrap">time (UTC)</th>
+              <th>question</th>
+              <th>answer</th>
+              <th>reason</th>
             </tr>
           </thead>
           <tbody></tbody>
@@ -135,6 +155,7 @@ INDEX_HTML = """<!doctype html>
 
 <script>
   const $ = sel => document.querySelector(sel);
+
   function toInputLocal(dt) {
     const pad = n => String(n).padStart(2, '0');
     return `${dt.getFullYear()}-${pad(dt.getMonth()+1)}-${pad(dt.getDate())}T${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
@@ -152,8 +173,65 @@ INDEX_HTML = """<!doctype html>
   }
   function escapeHtml(s){ return String(s||'').replace(/[&<>\\\"]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\\\"":"&quot;"}[c])); }
 
+  function scoreColor(v){
+    if (v == null || isNaN(v)) return '#94a3b8';
+    if (v >= 80) return '#16a34a';
+    if (v >= 60) return '#22c55e';
+    if (v >= 40) return '#eab308';
+    if (v >= 20) return '#f97316';
+    return '#dc2626';
+  }
+
+  function renderScoreCell(v){
+    const val = (v==null || isNaN(v)) ? '—' : String(v);
+    const pct = (v==null || isNaN(v)) ? 0 : Math.max(0, Math.min(100, v));
+    const color = scoreColor(v);
+    return `
+      <div class="flexcol">
+        <div class="badge mono" style="border-color:${color}; color:${color}">${val}</div>
+        <div class="scorebar" title="${val}">
+          <span style="width:${pct}%; background:${color}"></span>
+        </div>
+      </div>
+    `;
+  }
+
   let lastResponse = null;
-  const render0 = (res) => {
+
+  function renderTable(res){
+    const tbody = $('#table tbody');
+    tbody.innerHTML = '';
+    const q = ($('#search').value||'').toLowerCase();
+    let rows = (res?.candidates||[]).slice();
+
+    // сортировка
+    const sort = $('#sort').value;
+    if (sort === 'score_desc') rows.sort((a,b)=> (b.model_score??-1) - (a.model_score??-1));
+    if (sort === 'score_asc')  rows.sort((a,b)=> (a.model_score?? 1e9) - (b.model_score??1e9));
+    if (sort === 'time_asc')   rows.sort((a,b)=> (a.created_at_iso||'').localeCompare(b.created_at_iso||''));
+    if (sort === 'time_desc')  rows.sort((a,b)=> (b.created_at_iso||'').localeCompare(a.created_at_iso||''));
+
+    rows.forEach(c => {
+      const hay = `${c.msg_id} ${c.chat_id} ${c.content||''} ${c.answer||''} ${c.model_reason||''}`.toLowerCase();
+      if (q && !hay.includes(q)) return;
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td class="mono nowrap">${c.rank}</td>
+        <td style="min-width:110px">${renderScoreCell(c.model_score)}</td>
+        <td class="mono">${escapeHtml(c.msg_id)}</td>
+        <td class="mono">${escapeHtml(c.chat_id)}</td>
+        <td class="mono nowrap">${escapeHtml(c.created_at_iso)}</td>
+        <td>${escapeHtml(c.content||'')}</td>
+        <td>${escapeHtml(c.answer||'')}</td>
+        <td>${escapeHtml(c.model_reason||'')}</td>
+      `;
+      tbody.appendChild(tr);
+    });
+  }
+
+  function render(res){
+    lastResponse = res;
+
     $('#cnt').textContent = (res?.candidates_count ?? 0);
     const s = [];
     s.push(`Кандидатов: ${res?.candidates_count ?? 0}`);
@@ -168,36 +246,21 @@ INDEX_HTML = """<!doctype html>
     } else { $('#winner').style.display='none'; $('#winner').innerHTML=''; }
 
     $('#raw').textContent = res?.raw_model_output || '';
+    renderTable(res);
+  }
 
-    const tbody = $('#table tbody');
-    tbody.innerHTML = '';
-    const q = ($('#search').value||'').toLowerCase();
-    (res?.candidates||[]).forEach(c => {
-      if (q && !(`${c.msg_id} ${c.chat_id} ${c.content}`.toLowerCase().includes(q))) return;
-      const tr = document.createElement('tr');
-      tr.innerHTML = `<td class="mono">${c.rank}</td>
-                      <td class="mono">${escapeHtml(c.msg_id)}</td>
-                      <td class="mono">${escapeHtml(c.chat_id)}</td>
-                      <td class="mono">${escapeHtml(c.created_at_iso)}</td>
-                      <td>${c.is_question ? '✓' : '—'}</td>
-                      <td class="mono">${c.prescore??''}</td>
-                      <td>${escapeHtml(c.content)}</td>`;
-      tbody.appendChild(tr);
-    });
-  };
-  function render(res){ lastResponse = res; render0(res); }
-
-  async function call(returnCandidatesOnly){
+  async function call(doFinal){
     try {
       uiBusy(true);
       const payload = {
         start: $('#start').value.replace('T',' '),
         end: $('#end').value.replace('T',' '),
         tz: $('#tz').value || 'Europe/Amsterdam',
-        candidate_limit: Math.max(1, parseInt($('#limit').value||'1000',10)),
+        candidate_limit: Math.max(1, parseInt($('#limit').value||'200',10)),
         use_prescoring: $('#use_prescoring').checked,
         dedupe: $('#dedupe').checked,
-        return_candidates_only: !!returnCandidatesOnly,
+        scoring_criteria: $('#criteria').value,
+        do_final_llm_selection: !!doFinal
       };
       const r = await fetch('/api/pick_best_question', {
         method: 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)
@@ -209,21 +272,20 @@ INDEX_HTML = """<!doctype html>
     } finally { uiBusy(false); }
   }
 
-  $('#btnCandidatesOnly').addEventListener('click', ()=> call(true));
-  $('#btnPickBest').addEventListener('click', ()=> call(false));
-  $('#search').addEventListener('input', ()=>{ if (lastResponse) render0(lastResponse); });
+  $('#btnCandidatesOnly').addEventListener('click', ()=> call(false));
+  $('#btnPickBest').addEventListener('click', ()=> call(true));
+  $('#search').addEventListener('input', ()=>{ if (lastResponse) renderTable(lastResponse); });
+  $('#sort').addEventListener('change', ()=>{ if (lastResponse) renderTable(lastResponse); });
 </script>
 </body>
 </html>
 """
 
-
-# --- Роуты ---
+# --- Routes ---
 @app.get("/", response_class=HTMLResponse)
 async def index():
     logger.debug("Serving index.html")
     return HTMLResponse(INDEX_HTML)
-
 
 @app.post("/api/pick_best_question")
 async def proxy_pick_best(request: Request):
@@ -248,7 +310,6 @@ async def proxy_pick_best(request: Request):
             resp = await client.post(url, json=payload)
             logger.info(f"Backend response status: {resp.status_code}")
             logger.debug(f"Backend response headers: {resp.headers}")
-            # если надо логировать контент, осторожно с большим телом:
             logger.debug(f"Backend response content (truncated): {resp.text[:500]}")
             return Response(
                 content=resp.content,
