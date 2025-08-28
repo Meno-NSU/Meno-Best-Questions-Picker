@@ -1,12 +1,22 @@
 import os
 
 import httpx
+import logging
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+# --- logging setup ---
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+)
+logger = logging.getLogger("frontend")
+
 BACKEND_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:8000")
 app = FastAPI(title="Best Question Picker — Front")
+
+logger.info(f"Frontend app started. BACKEND_URL={BACKEND_URL}")
 
 # --- HTML (встроенный шаблон) ---
 INDEX_HTML = """<!doctype html>
@@ -211,6 +221,7 @@ INDEX_HTML = """<!doctype html>
 # --- Роуты ---
 @app.get("/", response_class=HTMLResponse)
 async def index():
+    logger.debug("Serving index.html")
     return HTMLResponse(INDEX_HTML)
 
 
@@ -220,20 +231,33 @@ async def proxy_pick_best(request: Request):
     Проксируем на BACKEND_URL/pick_best_question,
     чтобы фронт и API были на одном origin (никакого CORS).
     """
+    logger.info("Received request at /api/pick_best_question")
     try:
         payload = await request.json()
-    except Exception:
+        logger.debug(f"Parsed JSON payload: {payload}")
+    except Exception as e:
+        logger.error(f"Failed to parse JSON body: {e}")
         return JSONResponse({"error": "invalid JSON"}, status_code=400)
 
     url = f"{BACKEND_URL.rstrip('/')}/pick_best_question"
+    logger.info(f"Forwarding request to backend: {url}")
+
     timeout = httpx.Timeout(30.0, read=60.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
         try:
             resp = await client.post(url, json=payload)
+            logger.info(f"Backend response status: {resp.status_code}")
+            logger.debug(f"Backend response headers: {resp.headers}")
+            # если надо логировать контент, осторожно с большим телом:
+            logger.debug(f"Backend response content (truncated): {resp.text[:500]}")
             return Response(
                 content=resp.content,
                 status_code=resp.status_code,
                 media_type=resp.headers.get("content-type", "application/json"),
             )
         except httpx.RequestError as e:
+            logger.error(f"Failed to reach backend: {e}")
             return JSONResponse({"error": f"backend unreachable: {str(e)}"}, status_code=502)
+        except Exception as e:
+            logger.exception("Unexpected error during proxy call")
+            return JSONResponse({"error": f"unexpected error: {str(e)}"}, status_code=500)
