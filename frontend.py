@@ -16,7 +16,7 @@ app = FastAPI(title="Best Question Picker — Front")
 
 logger.info(f"Frontend app started. BACKEND_URL={BACKEND_URL}")
 
-# --- HTML (встроенный шаблон) ---
+# --- HTML (inline) ---
 INDEX_HTML = """<!doctype html>
 <html lang="ru">
 <head>
@@ -38,6 +38,7 @@ INDEX_HTML = """<!doctype html>
     input[type="checkbox"] { width:auto; scale:1.1; }
     button { border:1px solid var(--prim); background: var(--prim); color:#fff; padding:10px 14px; border-radius: 12px; font-weight:600; cursor:pointer; }
     button.secondary { background:#fff; color: var(--prim); }
+    button.ghost { background:#fff; color: var(--fg); border-color: var(--line); }
     button:disabled { opacity:.6; cursor:not-allowed; }
     .actions { display:flex; gap:10px; align-items:center; flex-wrap: wrap; }
     .status { font-size:12px; color: var(--muted); }
@@ -99,7 +100,8 @@ INDEX_HTML = """<!doctype html>
         </div>
       </div>
       <div class="actions" style="margin-top:12px">
-        <button id="btnCandidatesOnly" class="secondary">Оценить (LLM), без финального выбора</button>
+        <button id="btnOnlyList" class="ghost">Только кандидаты (без LLM)</button>
+        <button id="btnScoreOnly" class="secondary">Оценить (LLM), без финального выбора</button>
         <button id="btnPickBest">Оценить + выбрать победителя</button>
         <span id="status" class="status"></span>
         <div class="search">
@@ -168,7 +170,9 @@ INDEX_HTML = """<!doctype html>
   });
 
   function uiBusy(b) {
-    $('#btnCandidatesOnly').disabled = b; $('#btnPickBest').disabled = b;
+    $('#btnOnlyList').disabled = b;
+    $('#btnScoreOnly').disabled = b;
+    $('#btnPickBest').disabled = b;
     $('#status').textContent = b ? 'выполняю…' : '';
   }
   function escapeHtml(s){ return String(s||'').replace(/[&<>\\\"]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\\\"":"&quot;"}[c])); }
@@ -232,9 +236,16 @@ INDEX_HTML = """<!doctype html>
   function render(res){
     lastResponse = res;
 
-    $('#cnt').textContent = (res?.candidates_count ?? 0);
+    const total = (res?.candidates_count ?? 0);
+    const scored = (res?.candidates||[]).filter(x => typeof x.model_score === 'number').length;
+    const avg = (scored>0)
+      ? Math.round(10 * (res.candidates.filter(x => typeof x.model_score==='number').reduce((s,x)=>s+x.model_score,0)/scored)) / 10
+      : null;
+
+    $('#cnt').textContent = total;
     const s = [];
-    s.push(`Кандидатов: ${res?.candidates_count ?? 0}`);
+    s.push(`Кандидатов: ${total}`);
+    s.push(`Оценено: ${scored}${avg!=null?` (avg: ${avg})`:''}`);
     if (res?.winner_msg_id) s.push(`Победитель: ${res.winner_msg_id}`);
     $('#summary').textContent = s.join(' · ');
 
@@ -249,7 +260,8 @@ INDEX_HTML = """<!doctype html>
     renderTable(res);
   }
 
-  async function call(doFinal){
+  async function call(mode){
+    // mode: 'onlyList' | 'scoreOnly' | 'scoreAndPick'
     try {
       uiBusy(true);
       const payload = {
@@ -260,7 +272,8 @@ INDEX_HTML = """<!doctype html>
         use_prescoring: $('#use_prescoring').checked,
         dedupe: $('#dedupe').checked,
         scoring_criteria: $('#criteria').value,
-        do_final_llm_selection: !!doFinal
+        do_final_llm_selection: (mode === 'scoreAndPick'),
+        return_candidates_only: (mode === 'onlyList')
       };
       const r = await fetch('/api/pick_best_question', {
         method: 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)
@@ -269,11 +282,13 @@ INDEX_HTML = """<!doctype html>
       render(await r.json());
     } catch (e) {
       $('#summary').innerHTML = `<span class="error">Ошибка: ${escapeHtml(e.message||String(e))}</span>`;
+      $('#raw').textContent = '';
     } finally { uiBusy(false); }
   }
 
-  $('#btnCandidatesOnly').addEventListener('click', ()=> call(false));
-  $('#btnPickBest').addEventListener('click', ()=> call(true));
+  $('#btnOnlyList').addEventListener('click', ()=> call('onlyList'));
+  $('#btnScoreOnly').addEventListener('click', ()=> call('scoreOnly'));
+  $('#btnPickBest').addEventListener('click', ()=> call('scoreAndPick'));
   $('#search').addEventListener('input', ()=>{ if (lastResponse) renderTable(lastResponse); });
   $('#sort').addEventListener('change', ()=>{ if (lastResponse) renderTable(lastResponse); });
 </script>
@@ -293,31 +308,33 @@ async def proxy_pick_best(request: Request):
     Проксируем на BACKEND_URL/pick_best_question,
     чтобы фронт и API были на одном origin (никакого CORS).
     """
-    logger.info("Received request at /api/pick_best_question")
     try:
         payload = await request.json()
-        logger.debug(f"Parsed JSON payload: {payload}")
     except Exception as e:
         logger.error(f"Failed to parse JSON body: {e}")
         return JSONResponse({"error": "invalid JSON"}, status_code=400)
 
+    mode = (
+        "onlyList" if payload.get("return_candidates_only")
+        else ("scoreAndPick" if payload.get("do_final_llm_selection") else "scoreOnly")
+    )
     url = f"{BACKEND_URL.rstrip('/')}/pick_best_question"
-    logger.info(f"Forwarding request to backend: {url}")
+    logger.info(f"Forwarding to backend [{mode}] -> {url}")
 
-    timeout = httpx.Timeout(30.0, read=60.0)
+    timeout = httpx.Timeout(30.0, read=120.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
         try:
             resp = await client.post(url, json=payload)
-            logger.info(f"Backend response status: {resp.status_code}")
-            logger.debug(f"Backend response headers: {resp.headers}")
-            logger.debug(f"Backend response content (truncated): {resp.text[:500]}")
+            logger.info(f"Backend status: {resp.status_code} [{mode}]")
+            logger.debug(f"Backend headers: {resp.headers}")
+            logger.debug(f"Backend body (truncated): {resp.text[:500]}")
             return Response(
                 content=resp.content,
                 status_code=resp.status_code,
                 media_type=resp.headers.get("content-type", "application/json"),
             )
         except httpx.RequestError as e:
-            logger.error(f"Failed to reach backend: {e}")
+            logger.error(f"Backend unreachable: {e}")
             return JSONResponse({"error": f"backend unreachable: {str(e)}"}, status_code=502)
         except Exception as e:
             logger.exception("Unexpected error during proxy call")
